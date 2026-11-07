@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>메일 링크</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+  :root { --c:#0f6cbd; --bg:#fff; --fg:#242424; --mut:#616161; --bd:#d1d1d1; --ok:#107c10; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1f1f1f; --fg:#f0f0f0; --mut:#adadad; --bd:#444; --c:#4ea4f0; --ok:#54b054; } }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:14px; font-family:"Segoe UI","Malgun Gothic",sans-serif; font-size:13px; background:var(--bg); color:var(--fg); }
+  h1 { font-size:15px; margin:0 0 12px; }
+  label { display:block; font-size:12px; color:var(--mut); margin:12px 0 4px; }
+  input { width:100%; padding:7px 8px; border:1px solid var(--bd); border-radius:4px; font:inherit; background:var(--bg); color:var(--fg); }
+  .meta { font-size:12px; color:var(--mut); word-break:break-all; }
+  .opts { display:flex; gap:12px; margin-top:6px; font-size:12px; color:var(--mut); }
+  .opts label { display:flex; align-items:center; gap:4px; margin:0; }
+  button { width:100%; margin-top:8px; padding:9px; border:1px solid var(--bd); border-radius:4px; font:inherit; cursor:pointer; background:var(--bg); color:var(--fg); }
+  button.primary { background:var(--c); border-color:var(--c); color:#fff; font-weight:600; }
+  button:disabled { opacity:.5; cursor:default; }
+  #msg { margin-top:10px; min-height:18px; font-size:12px; color:var(--ok); }
+  #msg.err { color:#c50f1f; }
+  #preview { margin-top:12px; padding:8px; border:1px dashed var(--bd); border-radius:4px; word-break:break-all; }
+  #preview a { color:var(--c); }
+  #empty { color:var(--mut); }
+</style>
+</head>
+<body>
+  <h1>📎 메일 링크</h1>
+  <div id="empty">메일을 하나 선택해 줘.</div>
+
+  <div id="main" hidden>
+    <div class="meta" id="info"></div>
+
+    <label for="text">링크로 쓸 글자</label>
+    <input id="text">
+    <div class="opts">
+      <label><input type="checkbox" id="optFrom"> 보낸 사람</label>
+      <label><input type="checkbox" id="optDate"> 날짜</label>
+    </div>
+
+    <button class="primary" id="copyRich">글자에 링크 걸어서 복사</button>
+    <button id="copyUrl">URL만 복사</button>
+    <button id="open">브라우저에서 열어보기</button>
+
+    <div id="msg"></div>
+    <div id="preview"></div>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+let cur = null; // { subject, from, date, url }
+
+function pad(n){ return String(n).padStart(2,"0"); }
+function fmtDate(d){ return d ? `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}` : ""; }
+function esc(s){ return s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+function buildText(){
+  if(!cur) return "";
+  let t = cur.subject || "(제목 없음)";
+  const extra = [];
+  if($("optFrom").checked && cur.from) extra.push(cur.from);
+  if($("optDate").checked && cur.date) extra.push(cur.date);
+  return extra.length ? `${t} (${extra.join(", ")})` : t;
+}
+
+function refreshText(){ $("text").value = buildText(); updatePreview(); }
+function updatePreview(){
+  if(!cur) return;
+  $("preview").innerHTML = `미리보기: <a href="${esc(cur.url)}" target="_blank">${esc($("text").value || cur.url)}</a>`;
+}
+
+function say(t, err){ $("msg").textContent = t; $("msg").className = err ? "err" : ""; if(!err) setTimeout(()=>{ if($("msg").textContent===t) $("msg").textContent=""; }, 2500); }
+
+function load(){
+  const item = Office.context.mailbox.item;
+  if(!item || !item.itemId){
+    cur = null; $("main").hidden = true; $("empty").hidden = false;
+    $("empty").textContent = item ? "보낸 메일/임시 저장 메일은 저장된 다음에 링크를 만들 수 있어." : "메일을 하나 선택해 줘.";
+    return;
+  }
+  let restId;
+  try {
+    restId = Office.context.mailbox.convertToRestId(item.itemId, Office.MailboxEnums.RestVersion.v2_0);
+  } catch(e) {
+    restId = item.itemId; // 이미 REST 형식인 환경 대비
+  }
+  const url = "https://outlook.office.com/mail/deeplink/read/" + encodeURIComponent(restId);
+  const from = item.from ? (item.from.displayName || item.from.emailAddress || "") : "";
+  const date = fmtDate(item.dateTimeCreated);
+  cur = { subject: item.subject || "", from, date, url };
+
+  $("empty").hidden = true; $("main").hidden = false;
+  $("info").textContent = [from, date].filter(Boolean).join(" · ");
+  refreshText();
+  $("msg").textContent = "";
+}
+
+async function copyRich(){
+  if(!cur) return;
+  const text = $("text").value || cur.url;
+  const html = `<a href="${esc(cur.url)}">${esc(text)}</a>`;
+  // 1) 최신 클립보드 API (HTML + 일반 텍스트)
+  try {
+    if(navigator.clipboard && window.ClipboardItem){
+      await navigator.clipboard.write([new ClipboardItem({
+        "text/html": new Blob([html], {type:"text/html"}),
+        "text/plain": new Blob([text], {type:"text/plain"})
+      })]);
+      return say("복사됨! 붙여넣으면 클릭 가능한 글자로 들어가.");
+    }
+  } catch(e) {}
+  // 2) 예전 방식 (선택 영역 복사)
+  try {
+    const div = document.createElement("div");
+    div.contentEditable = "true";
+    div.style.position = "fixed"; div.style.left = "-9999px";
+    div.innerHTML = html;
+    document.body.appendChild(div);
+    const r = document.createRange(); r.selectNodeContents(div);
+    const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+    const ok = document.execCommand("copy");
+    s.removeAllRanges(); div.remove();
+    if(ok) return say("복사됨! 붙여넣으면 클릭 가능한 글자로 들어가.");
+  } catch(e) {}
+  say("자동 복사가 막혔어. 아래 미리보기 링크를 드래그해서 Ctrl+C 해 줘.", true);
+}
+
+async function copyUrl(){
+  if(!cur) return;
+  try { await navigator.clipboard.writeText(cur.url); return say("URL 복사됨!"); } catch(e) {}
+  const ta = document.createElement("textarea");
+  ta.value = cur.url; ta.style.position="fixed"; ta.style.left="-9999px";
+  document.body.appendChild(ta); ta.select();
+  const ok = document.execCommand("copy"); ta.remove();
+  ok ? say("URL 복사됨!") : say("복사가 막혔어.", true);
+}
+
+function openLink(){
+  if(!cur) return;
+  try { Office.context.ui.openBrowserWindow(cur.url); } catch(e) { window.open(cur.url, "_blank"); }
+}
+
+Office.onReady(() => {
+  $("optFrom").onchange = refreshText;
+  $("optDate").onchange = refreshText;
+  $("text").oninput = updatePreview;
+  $("copyRich").onclick = copyRich;
+  $("copyUrl").onclick = copyUrl;
+  $("open").onclick = openLink;
+  load();
+  // 패널을 고정(핀)해두면 메일을 바꿀 때마다 자동 갱신
+  try { Office.context.mailbox.addHandlerAsync(Office.EventType.ItemChanged, load); } catch(e) {}
+});
+</script>
+</body>
+</html>
